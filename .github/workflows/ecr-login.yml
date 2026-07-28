@@ -10,11 +10,9 @@ on:
     secrets:
       aws-role-arn:
         description: IAM role ARN to assume via OIDC
-        type: string
         required: true
       aws-account-id:
         description: AWS account ID (used to build the ECR registry URL)
-        type: string
         required: true
     outputs:
       registry:
