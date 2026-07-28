@@ -7,6 +7,7 @@ on:
         description: AWS region for ECR
         type: string
         required: true
+    secrets:
       aws-role-arn:
         description: IAM role ARN to assume via OIDC
         type: string
