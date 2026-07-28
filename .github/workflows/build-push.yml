@@ -87,7 +87,7 @@ jobs:
     name: ECR login
     needs: detect-changes
     if: needs.detect-changes.outputs.any-changed == 'true'
-    uses: ./.github/workflows/reusable/ecr-login.yml
+    uses: ./.github/workflows/ecr-login.yml
     with:
       aws-region:     ${{ vars.AWS_REGION }}
     secrets:
