@@ -1,0 +1,12 @@
+# Trivy vulnerability allowlist
+#
+# To suppress a known/accepted CVE, add its ID here (one per line):
+#   CVE-YYYY-NNNNN
+#
+# Each entry must include a comment explaining why it is accepted and
+# a review-by date, e.g.:
+#
+#   CVE-2023-12345  # accepted: fix not yet available upstream; review 2026-09-01
+#
+# Scan results (SARIF) are uploaded as pipeline artifacts on every build.
+# Review them in the Actions run → Artifacts → trivy-{service}.

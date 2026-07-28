@@ -1,0 +1,229 @@
+name: Build and Push
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ── 1. Detect which service directories changed ──────────────────────────────
+  detect-changes:
+    name: Detect changed services
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      services: ${{ steps.build-matrix.outputs.services }}
+      any-changed: ${{ steps.build-matrix.outputs.any-changed }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Filter changed paths
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            config-server:
+              - 'spring-petclinic-config-server/**'
+            discovery-server:
+              - 'spring-petclinic-discovery-server/**'
+            api-gateway:
+              - 'spring-petclinic-api-gateway/**'
+            customers-service:
+              - 'spring-petclinic-customers-service/**'
+            visits-service:
+              - 'spring-petclinic-visits-service/**'
+            vets-service:
+              - 'spring-petclinic-vets-service/**'
+            genai-service:
+              - 'spring-petclinic-genai-service/**'
+            admin-server:
+              - 'spring-petclinic-admin-server/**'
+
+      - name: Build changed-service matrix
+        id: build-matrix
+        env:
+          CHANGED_CONFIG_SERVER:    ${{ steps.filter.outputs.config-server }}
+          CHANGED_DISCOVERY_SERVER: ${{ steps.filter.outputs.discovery-server }}
+          CHANGED_API_GATEWAY:      ${{ steps.filter.outputs.api-gateway }}
+          CHANGED_CUSTOMERS:        ${{ steps.filter.outputs.customers-service }}
+          CHANGED_VISITS:           ${{ steps.filter.outputs.visits-service }}
+          CHANGED_VETS:             ${{ steps.filter.outputs.vets-service }}
+          CHANGED_GENAI:            ${{ steps.filter.outputs.genai-service }}
+          CHANGED_ADMIN:            ${{ steps.filter.outputs.admin-server }}
+        run: |
+          declare -A MAP=(
+            [config-server]="$CHANGED_CONFIG_SERVER"
+            [discovery-server]="$CHANGED_DISCOVERY_SERVER"
+            [api-gateway]="$CHANGED_API_GATEWAY"
+            [customers-service]="$CHANGED_CUSTOMERS"
+            [visits-service]="$CHANGED_VISITS"
+            [vets-service]="$CHANGED_VETS"
+            [genai-service]="$CHANGED_GENAI"
+            [admin-server]="$CHANGED_ADMIN"
+          )
+
+          CHANGED=()
+          for svc in "${!MAP[@]}"; do
+            [[ "${MAP[$svc]}" == "true" ]] && CHANGED+=("$svc")
+          done
+
+          if [[ ${#CHANGED[@]} -eq 0 ]]; then
+            echo "any-changed=false" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+            echo "services=" >> "$GITHUB_OUTPUT"
+          else
+            MATRIX=$(printf '%s\n' "${CHANGED[@]}" | jq -R . | jq -sc '{include: [.[] | {service: .}]}')
+            echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+            echo "services=${CHANGED[*]}" >> "$GITHUB_OUTPUT"
+            echo "any-changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── 2. Resolve ECR registry URL once (reusable workflow) ─────────────────────
+  ecr-setup:
+    name: ECR login
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-changed == 'true'
+    uses: ./.github/workflows/reusable/ecr-login.yml
+    with:
+      aws-region:     ${{ vars.AWS_REGION }}
+      aws-role-arn:   ${{ secrets.AWS_ROLE_ARN }}
+      aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+    permissions:
+      id-token: write
+      contents: read
+
+  # ── 3. Build, scan, push — one job per changed service ───────────────────────
+  build:
+    name: Build ${{ matrix.service }}
+    needs: [detect-changes, ecr-setup]
+    if: needs.detect-changes.outputs.any-changed == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+
+      - name: Set up QEMU (ARM64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registries: ${{ secrets.AWS_ACCOUNT_ID }}
+
+      - name: Derive names
+        id: names
+        env:
+          SERVICE: ${{ matrix.service }}
+          REGISTRY: ${{ needs.ecr-setup.outputs.registry }}
+          SHA: ${{ github.sha }}
+        run: |
+          # Maven module folder = spring-petclinic-{service}
+          MODULE="spring-petclinic-${SERVICE}"
+          # Maven produces: springcommunity/spring-petclinic-{service}
+          LOCAL_IMAGE="springcommunity/${MODULE}"
+          SHORT_SHA="${SHA::7}"
+          ECR_IMAGE="${REGISTRY}/petclinic-dev/${SERVICE}:${SHORT_SHA}"
+          echo "module=$MODULE"        >> "$GITHUB_OUTPUT"
+          echo "local-image=$LOCAL_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "short-sha=$SHORT_SHA"  >> "$GITHUB_OUTPUT"
+          echo "ecr-image=$ECR_IMAGE"  >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image (linux/arm64)
+        env:
+          MODULE: ${{ steps.names.outputs.module }}
+        run: |
+          ./mvnw -pl "$MODULE" -am clean install \
+            -P buildDocker \
+            -Dcontainer.platform=linux/arm64 \
+            --no-transfer-progress
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.names.outputs.local-image }}
+          format: table
+          exit-code: '1'
+          severity: CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+
+      - name: Save Trivy results as artifact
+        if: always()
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.names.outputs.local-image }}
+          format: sarif
+          output: trivy-${{ matrix.service }}.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+
+      - name: Upload Trivy SARIF report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-${{ matrix.service }}
+          path: trivy-${{ matrix.service }}.sarif
+          retention-days: 30
+
+      - name: Tag image for ECR
+        env:
+          LOCAL_IMAGE: ${{ steps.names.outputs.local-image }}
+          ECR_IMAGE:   ${{ steps.names.outputs.ecr-image }}
+        run: docker tag "$LOCAL_IMAGE" "$ECR_IMAGE"
+
+      - name: Push to ECR
+        env:
+          ECR_IMAGE: ${{ steps.names.outputs.ecr-image }}
+        run: docker push "$ECR_IMAGE"
+
+  # ── 4. Notify platform repo so ArgoCD picks up the new tags ──────────────────
+  notify:
+    name: Dispatch app-image-built
+    needs: [detect-changes, build]
+    if: needs.detect-changes.outputs.any-changed == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fire repository_dispatch to platform repo
+        uses: actions/github-script@v7
+        env:
+          SERVICES: ${{ needs.detect-changes.outputs.services }}
+          SHA:      ${{ github.sha }}
+        with:
+          github-token: ${{ secrets.PLATFORM_REPO_TOKEN }}
+          script: |
+            await github.rest.repos.createDispatchEvent({
+              owner: 'Gulzik',
+              repo:  'petclinic-platform',
+              event_type: 'app-image-built',
+              client_payload: {
+                sha:      process.env.SHA.substring(0, 7),
+                services: process.env.SERVICES,
+              },
+            });
