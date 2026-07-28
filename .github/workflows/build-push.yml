@@ -90,6 +90,7 @@ jobs:
     uses: ./.github/workflows/reusable/ecr-login.yml
     with:
       aws-region:     ${{ vars.AWS_REGION }}
+    secrets:
       aws-role-arn:   ${{ secrets.AWS_ROLE_ARN }}
       aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
     permissions:
