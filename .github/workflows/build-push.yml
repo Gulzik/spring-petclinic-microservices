@@ -164,7 +164,7 @@ jobs:
             --no-transfer-progress
 
       - name: Scan image with Trivy (blocking)
-        uses: aquasecurity/trivy-action@0.30.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.names.outputs.local-image }}
           format: table
@@ -175,7 +175,7 @@ jobs:
 
       - name: Save Trivy results as SARIF
         if: always()
-        uses: aquasecurity/trivy-action@0.30.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.names.outputs.local-image }}
           format: sarif
