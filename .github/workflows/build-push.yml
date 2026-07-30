@@ -163,26 +163,35 @@ jobs:
             -Dcontainer.platform=linux/arm64 \
             --no-transfer-progress
 
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ steps.names.outputs.local-image }}
-          format: table
-          exit-code: '1'
-          severity: CRITICAL
-          ignore-unfixed: true
-          trivyignores: .trivyignore
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
 
-      - name: Save Trivy results as artifact
+      - name: Scan image with Trivy
+        env:
+          IMAGE: ${{ steps.names.outputs.local-image }}
+        run: |
+          trivy image \
+            --exit-code 1 \
+            --severity CRITICAL \
+            --ignore-unfixed \
+            --ignorefile .trivyignore \
+            --format table \
+            "$IMAGE"
+
+      - name: Save Trivy results as SARIF
         if: always()
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ steps.names.outputs.local-image }}
-          format: sarif
-          output: trivy-${{ matrix.service }}.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          trivyignores: .trivyignore
+        env:
+          IMAGE: ${{ steps.names.outputs.local-image }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          trivy image \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --ignorefile .trivyignore \
+            --format sarif \
+            --output "trivy-${SERVICE}.sarif" \
+            "$IMAGE"
 
       - name: Upload Trivy SARIF report
         if: always()
@@ -190,6 +199,7 @@ jobs:
         with:
           name: trivy-${{ matrix.service }}
           path: trivy-${{ matrix.service }}.sarif
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Tag image for ECR
