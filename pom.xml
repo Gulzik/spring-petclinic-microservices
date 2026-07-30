@@ -6,12 +6,12 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.0.1</version>
+        <version>4.0.6</version>
     </parent>
 
     <groupId>org.springframework.samples</groupId>
     <artifactId>spring-petclinic-microservices</artifactId>
-    <version>4.0.1</version>
+    <version>4.0.6</version>
     <name>${project.artifactId}</name>
     <packaging>pom</packaging>
 
@@ -30,6 +30,8 @@
         <java.version>17</java.version>
 
         <spring-cloud.version>2025.1.0</spring-cloud.version>
+        <!-- CVE-2025-14813: force bouncycastle >= 1.81.1 -->
+        <bouncycastle.version>1.81.1</bouncycastle.version>
         <chaos-monkey-spring-boot.version>3.1.0</chaos-monkey-spring-boot.version>
         <jolokia-core.version>1.7.1</jolokia-core.version>
         <datasource-micrometer.version>2.0.1</datasource-micrometer.version>
@@ -49,6 +51,12 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- CVE-2025-14813: pin bouncycastle to patched version -->
+            <dependency>
+                <groupId>org.bouncycastle</groupId>
+                <artifactId>bcprov-jdk18on</artifactId>
+                <version>${bouncycastle.version}</version>
+            </dependency>
             <dependency>
                 <groupId>org.springframework.cloud</groupId>
                 <artifactId>spring-cloud-dependencies</artifactId>
